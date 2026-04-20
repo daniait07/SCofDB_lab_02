@@ -10,7 +10,7 @@ import pytest
 import uuid
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
-
+from sqlalchemy import text
 from app.application.payment_service import PaymentService
 from app.domain.exceptions import OrderAlreadyPaidError
 
@@ -27,7 +27,12 @@ async def db_session():
     TODO: Реализовать фикстуру (см. test_concurrent_payment_unsafe.py)
     """
     # TODO: Реализовать создание сессии
-    raise NotImplementedError("TODO: Реализовать db_session fixture")
+
+    engine = create_async_engine(DATABASE_URL, echo=True)
+    AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with AsyncSessionLocal() as session:
+        yield session
+    await engine.dispose()
 
 
 @pytest.fixture
@@ -38,7 +43,30 @@ async def test_order(db_session):
     TODO: Реализовать фикстуру (см. test_concurrent_payment_unsafe.py)
     """
     # TODO: Реализовать создание тестового заказа
-    raise NotImplementedError("TODO: Реализовать test_order fixture")
+
+    user_id = uuid.uuid4()
+    order_id = uuid.uuid4()
+
+    await db_session.execute(
+        text(
+            "INSERT INTO users (id, email, name, created_at) "
+            "VALUES (:uid, 'safe@test.com', 'Safe User', NOW()) "
+            "ON CONFLICT (email) DO NOTHING"),
+        {"uid": str(user_id)},)
+ 
+    res = await db_session.execute(
+        text("SELECT id FROM users WHERE email = 'safe@test.com'"))
+    user_id_db = res.scalar()
+
+    await db_session.execute(
+        text(
+            "INSERT INTO orders (id, user_id, status, total_amount, created_at) "
+            "VALUES (:oid, :uid, 'created', 100.00, NOW()) "
+            "ON CONFLICT (id) DO NOTHING"),
+        {"oid": str(order_id), "uid": str(user_id_db)},)
+    await db_session.commit()
+
+    return order_id
 
 
 @pytest.mark.asyncio
@@ -127,7 +155,46 @@ async def test_concurrent_payment_safe_with_explicit_timing():
     Это подтверждает, что FOR UPDATE действительно блокирует строку.
     """
     # TODO: Реализовать тест с проверкой блокировки
-    raise NotImplementedError("TODO: Реализовать test_concurrent_payment_safe_with_explicit_timing")
+ 
+    order_id = test_order
+ 
+    engine = create_async_engine(DATABASE_URL, echo=True)
+    AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    async def payment_attempt():
+        async with AsyncSessionLocal() as session:
+            service = PaymentService(session)
+            try:
+                await service.pay_order_safe(order_id)
+                await session.commit()
+                return "ok"
+            except Exception as e:
+                await session.rollback()
+                return e
+ 
+    results = await asyncio.gather(
+        payment_attempt(),
+        payment_attempt(),
+        return_exceptions=True,)
+
+    success_count = sum(1 for r in results if not isinstance(r, Exception))
+    error_count = sum(1 for r in results if isinstance(r, Exception))
+ 
+    async with AsyncSessionLocal() as session:
+        service = PaymentService(session)
+        history = await service.get_payment_history(order_id)
+
+    print("✅ RACE CONDITION PREVENTED!")
+    print(f"заказ {order_id} был оплачен только {len(history)} время")
+    if len(history) == 1:
+        print(f"  - {history[0]['changed_at']}: status = {history[0]['status']}")
+    print(f"результат: {results}")
+
+    assert success_count == 1, "ожидалась одна успешная оплата"
+    assert error_count == 1, "ожидалась одна неудачная попытка"
+    assert len(history) == 1, "ожидалась 1 запись об оплате БЕЗ RACE CONDITION!"
+
+    await engine.dispose()
 
 
 @pytest.mark.asyncio
