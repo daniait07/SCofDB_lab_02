@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 
 from app.application.payment_service import PaymentService
-
+from app.tests.test_concurrent_payment_unsafe import DATABASE_URL
 
 # TODO: Настроить подключение к тестовой БД
 DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/marketplace"
@@ -179,7 +179,66 @@ async def test_concurrent_payment_unsafe_both_succeed():
     Это подтверждает, что проблема не в ошибках, а в race condition.
     """
     # TODO: Реализовать проверку успешности обеих транзакций
-    pytest.skip("дальше")
+ 
+    engine = create_async_engine(DATABASE_URL, echo=True)
+    AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    user_id = uuid.uuid4()
+    order_id = uuid.uuid4()
+
+    async with AsyncSessionLocal() as session:
+        await session.execute(
+            text(
+                "INSERT INTO users (id, email, name, created_at) "
+                "VALUES (:uid, 'unsafe2@test.com', 'Unsafe User 2', NOW()) "
+                "ON CONFLICT (email) DO NOTHING"),
+            {"uid": str(user_id)},)
+
+        res = await session.execute(
+            text("SELECT id FROM users WHERE email = 'unsafe2@test.com'"))
+        user_id_db = res.scalar()
+ 
+        await session.execute(
+            text(
+                "INSERT INTO orders (id, user_id, status, total_amount, created_at) "
+                "VALUES (:oid, :uid, 'created', 100.00, NOW()) "
+                "ON CONFLICT (id) DO NOTHING"),
+            {"oid": str(order_id), "uid": str(user_id_db)},)
+
+        await session.commit()
+
+    async def payment_attempt():
+        async with AsyncSessionLocal() as session:
+            service = PaymentService(session)
+            try:
+                await service.pay_order_unsafe(order_id)
+                await session.commit()
+                return "ok"
+            except Exception as e:
+                await session.rollback()
+                return e
+ 
+    results = await asyncio.gather(
+        payment_attempt(),
+        payment_attempt(),
+        return_exceptions=True,)
+ 
+    success_count = sum(1 for r in results if r == "ok")
+    error_count = sum(1 for r in results if isinstance(r, Exception))
+
+    assert success_count == 2, f"обе попытки должны быть успешными, results={results}"
+    assert error_count == 0, f"не ожидали исключений, results={results}"
+ 
+    async with AsyncSessionLocal() as session:
+        service = PaymentService(session)
+        history = await service.get_payment_history(order_id)
+
+    print("\n⚠️  BOTH TRANSACTIONS SUCCEEDED (UNSAFE)!")
+ 
+
+    assert len(history) >= 2, "ожидалось как минимум 2 записи 'paid' в истории"
+
+    await engine.dispose()
 
 
 if __name__ == "__main__":
