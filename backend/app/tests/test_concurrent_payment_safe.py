@@ -250,74 +250,7 @@ async def test_concurrent_payment_safe_multiple_orders():
     а не всю таблицу, что важно для производительности.
     """
     # TODO: Реализовать тест с несколькими заказами
- 
-    engine = create_async_engine(DATABASE_URL, echo=True)
-    AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-
-    user_id = uuid.uuid4()
-    order_id_1 = uuid.uuid4()
-    order_id_2 = uuid.uuid4()
-
-    async with AsyncSessionLocal() as session:
-        await session.execute(
-            text(
-                "INSERT INTO users (id, email, name, created_at) "
-                "VALUES (:uid, 'safe-multi@test.com', 'Safe Multi User', NOW()) "
-                "ON CONFLICT (email) DO NOTHING"),
-            {"uid": str(user_id)},)
-        res = await session.execute(
-            text("SELECT id FROM users WHERE email = 'safe-multi@test.com'"))
-        user_id_db = res.scalar()
- 
-        await session.execute(
-            text(
-                "INSERT INTO orders (id, user_id, status, total_amount, created_at) "
-                "VALUES (:oid, :uid, 'created', 50.00, NOW()) "
-                "ON CONFLICT (id) DO NOTHING"),
-            {"oid": str(order_id_1), "uid": str(user_id_db)},)
-        await session.execute(
-            text(
-                "INSERT INTO orders (id, user_id, status, total_amount, created_at) "
-                "VALUES (:oid, :uid, 'created', 75.00, NOW()) "
-                "ON CONFLICT (id) DO NOTHING"),
-            {"oid": str(order_id_2), "uid": str(user_id_db)},)
-
-        await session.commit()
- 
-    async def pay_order(order_id: uuid.UUID):
-        async with AsyncSessionLocal() as session:
-            service = PaymentService(session)
-            try:
-                await service.pay_order_safe(order_id)
-                await session.commit()
-                return "ok"
-            except Exception as e:
-                await session.rollback()
-                return e
-
-    results = await asyncio.gather(
-        pay_order(order_id_1),
-        pay_order(order_id_2),
-        return_exceptions=True,)
-
-    success_count = sum(1 for r in results if r == "ok")
-    error_count = sum(1 for r in results if isinstance(r, Exception))
- 
-    assert success_count == 2, f"обе оплаты должны быть успешными, results={results}"
-    assert error_count == 0, f"не ожидали ошибок, results={results}"
- 
-    async with AsyncSessionLocal() as session:
-        service = PaymentService(session)
-        history_1 = await service.get_payment_history(order_id_1)
-        history_2 = await service.get_payment_history(order_id_2)
-
-    print("\n✅ MULTI-ORDER SAFE PAYMENT!")
- 
-
-    assert len(history_1) == 1, "для первого заказа ожидается одна запись 'paid'"
-    assert len(history_2) == 1, "для второго заказа ожидается одна запись 'paid'"
-
-    await engine.dispose()
+    raise NotImplementedError("TODO: Реализовать test_concurrent_payment_safe_multiple_orders")
 
 
 if __name__ == "__main__":
