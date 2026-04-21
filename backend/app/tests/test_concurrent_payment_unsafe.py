@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 
 from app.application.payment_service import PaymentService
-from app.tests.test_concurrent_payment_unsafe import DATABASE_URL
+ 
 
 # TODO: Настроить подключение к тестовой БД
 DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/marketplace"
